@@ -2,33 +2,258 @@
 <html>
 
 <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <link rel="stylesheet" href="bootstrap/css/bootstrap.css">
+
+
     <script src="jquery.js"></script>
     <script>
+        var simpleProjects;
+        var selectedProject;
+        var api = 'http://valecs97licenta.zapto.org:8080/api/';
+
         function getSimpleProject() {
-            const url = 'http://localhost:8080/api/webMicroServices';
+            $('#execProjectSelect').append('<option value="" disabled selected>Connecting to server !</option>');
+            const url = api + 'simpleProjects';
             $.ajax({
                 dataType: "json",
                 url: url,
                 headers: {
                     'Access-Control-Allow-Origin': '*'
                 },
-                success: function(data){
-                    console.log("SUCCESS " + data[0]['name']);
+                success: function (data) {
+                    simpleProjects = data;
+                    populateSimpleProjectSelection(data);
+                    //console.log("SUCCESS " + data[0]['name']);
                 },
-                error: function(a,b,c){
+                error: function (a, b, c) {
+                    alert("Could not connect to server !");
+                    $('#execProjectSelect').empty().append('<option value="" disabled selected>Connection failed !</option>');
                     console.log("ERROR A=" + a + " B=" + b + "C=" + c);
                 }
             });
         }
-        getSimpleProject();
+
+        function executeProject(project) {
+            url = api + 'simpleProject?name=' + project['name'];
+            for (var i = 1; i <= project['parameters']; i++) {
+                url += '&args=' + $('#param' + i).val();
+            }
+            $("#execProjectBigButton").attr("disabled", true);
+            $.ajax({
+                url: url,
+                headers: {
+                    'Access-Control-Allow-Origin': '*'
+                },
+                success: function (data) {
+                    handleUserData(data);
+                    $("#execProjectBigButton").attr("disabled", false);
+                },
+                error: function (a, b, c) {
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                }
+            });
+        }
+
+        function addSimpleProject() {
+            const url = api + 'simpleProject';
+            var gitUrl;
+            switch ($('#addProjectSelectGit').find(":selected").text()) {
+                case "GitHub":
+                    gitUrl = 'https://github.com/';
+                    break;
+                case 'GitLab':
+                    gitUrl = 'https://gitlab.com/';
+                    break;
+            }
+            gitUrl += $('#addProjectUser').val() + '/';
+            gitUrl += $('#addProjectRepo').val();
+            var data = {
+                name: $('#addProjectName').val(),
+                gitUrl: gitUrl,
+                branch: $('#addProjectBranch').val(),
+                main: $('#addProjectMain').val(),
+                lang : "python3",
+                parameters: parseInt($('#addProjectParameters').val(), 10)
+            };
+            $("#addProjectBigButton").attr("disabled", true);
+            $.post({
+                url: url,
+                data: JSON.stringify(data),
+                contentType: "application/json; charset=utf-8",
+                success: function (data) {
+                    handleUserData(data);
+                    $("#addProjectBigButton").attr("disabled", false);
+                },
+                error: function (a, b, c) {
+                    alert("Error ! Please check console for details !");
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                }
+            });
+        }
+
+        function handleUserData(data) {
+            $('#result').empty();
+            console.log("Result: " + data);
+            if (String(data).length < 100) {
+                alert(data);
+            }
+            $('#result').append("Result: " + data);
+        }
+
+        function populateSimpleProjectSelection(data) {
+            $('#execProjectSelect').empty().append('<option value="" disabled selected>Select Project</option>');
+            $.each(data, function () {
+                //console.log(this);
+                var sel = document.getElementById('execProjectSelect');
+                var opt = document.createElement('option');
+                opt.appendChild(document.createTextNode(this['name']));
+                sel.appendChild(opt);
+            });
+        }
+
+        function myFunction() {
+            var x = document.getElementById("myTopnav");
+            if (x.className === "topnav") {
+                x.className += " responsive";
+            } else {
+                x.className = "topnav";
+            }
+        }
+
+        function constructor() {
+            $(".dropdown-menu li a").click(function () {
+                $(this).parents(".dropdown").find('.btn').html($(this).text() + ' <span class="caret"></span>');
+                $(this).parents(".dropdown").find('.btn').val($(this).data('value'));
+            });
+        }
+
+        function hideAll() {
+            $('#home').hide();
+            $('#execProject').hide();
+            $("#execProjectBigButton").hide();
+
+            $('#addProject').hide();
+
+            $('#homeButton').removeClass("active");
+            $('#execProjectButton').removeClass("active");
+            $('#addProjectButton').removeClass("active");
+            $('#addMicroButton').removeClass("active");
+
+            $("#execProjectParameters").empty();
+            $("#result").empty();
+            $('#execProjectSelect').empty();
+        }
+
+        function showHome() {
+            hideAll();
+            $('#home').show();
+            $("#homeButton").addClass("active");
+        }
+
+        function showExecProject() {
+            hideAll();
+            $('#execProject').show();
+            $("#execProjectButton").addClass("active");
+            getSimpleProject();
+        }
+
+        function showAddProject() {
+            hideAll();
+            $('#addProject').show();
+            $("#addProjectButton").addClass("active");
+        }
+
+        function addParameters(projectName) {
+            $("#execProjectParameters").empty();
+            $("result").empty();
+            project = simpleProjects.find(function (elem) {
+                return elem['name'] == projectName;
+            });
+            for (var i = 1; i <= project['parameters']; i++) {
+                $("#execProjectParameters").append('<input style="margin-top: 16px;" type="text" class="form-control" id="param' + i + '" placeholder="Parameter ' + i + '">');
+            }
+            selectedProject = project;
+            $("#execProjectBigButton").show();
+        }
+
+
+
     </script>
+    <link rel="stylesheet" href="style.css">
 </head>
 
 
 <body>
-    <button type="button" onclick="document.getElementById('demo').innerHTML = Date()">
-        Click me to display Date and Time.</button>
-    <p id="demo"></p>
+    <div class="topnav" id="myTopnav">
+        <a id="homeButton" onclick="showHome()">Home</a>
+        <a id="execProjectButton" onclick="showExecProject()">Execute Simple Project</a>
+        <a id="addProjectButton" onclick="showAddProject()">Add Simple Project</a>
+        <a id="addMicroButton">Add Microservice</a>
+        <a href="javascript:void(0);" class="icon" onclick="myFunction()">
+            <i class="fa fa-bars"></i>
+        </a>
+    </div>
+    <div class="centerpage">
+        <div id="home">
+            <div>
+                <h2>Responsive Topnav Example</h2>
+                <p>Resize the browser window to see how it works.</p>
+            </div>
+        </div>
+
+        <div id="execProject">
+            <select id="execProjectSelect" class="browser-default custom-select">
+            </select>
+            <div id='execProjectParameters'>
+            </div>
+            <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary"
+                id='execProjectBigButton'>Execute</button>
+
+        </div>
+
+        <div id="addProject">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectName" placeholder="Name">
+            <select style="margin-top: 16px;" id="addProjectSelectGit" class="browser-default custom-select">
+                <option value="">GitHub</option>
+                <option value="">GitLab</option>
+            </select>
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectUser"
+                placeholder="Username">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectRepo"
+                placeholder="Repository name">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectBranch"
+                placeholder="Branch">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectMain"
+                placeholder="Main file">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectParameters"
+                placeholder="No. of parameters">
+            <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary"
+                id='addProjectBigButton'>Add project</button>
+        </div>
+
+        <div id="result" style="margin-top:50px">
+        </div>
+    </div>
+    <script>
+
+        $('#execProjectSelect').change(function () {
+            addParameters($(this).val());
+        });
+
+        $("#execProjectBigButton").click(function () {
+            executeProject(selectedProject);
+        });
+
+        $("#addProjectBigButton").click(function () {
+            addSimpleProject();
+        });
+
+        showHome();
+
+    </script>
 </body>
 
 </html>
