@@ -6,13 +6,262 @@
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <link rel="stylesheet" href="bootstrap/css/bootstrap.css">
-
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="node_modules\stompjs\lib\stomp.js"></script>
 
     <script src="jquery.js"></script>
     <script>
+
+        var stompClient = null;
         var simpleProjects;
         var selectedProject;
         var api = 'http://valecs97licenta.zapto.org:8080/api/';
+        var connected = false;
+
+        var logs = null;
+        var limit = 10;
+        var start = 0;
+        var checkForDupli = limit;
+
+        var newData = [];
+        var canAdd = true;
+        var canAddWait = true;
+        var live = true;
+
+        var filter = null;
+        var showCustomConfiguration = false;
+
+        function switchLive(newLive) {
+            live = newLive;
+            if (live) {
+                canAdd = false;
+                canAddWait = false;
+                checkForDupli = limit;
+                getLogsWithLimit(limit, 0, filter);
+            }
+        }
+
+        function showPrevLogs() {
+            switchLive(false);
+            start += 1;
+            getLogsWithLimit(limit, start, filter);
+        }
+
+        function showNextLogs() {
+            if (start <= 1) {
+                start = 0;
+                switchLive(true);
+            } else {
+                start -= 1;
+            }
+            getLogsWithLimit(limit, start, filter);
+        }
+
+        function reloadLogs() {
+            canAdd = false;
+            canAddWait = false;
+            checkForDupli = limit;
+            getLogsWithLimit(limit, 0, filter);
+        }
+
+        function changeLimit(newLimit) {
+            limit = newLimit;
+            reloadLogs();
+        }
+
+        function filterLogs(newFilter) {
+            if (newFilter == "All") {
+                filter = null;
+            } else {
+                filter = newFilter;
+            }
+            reloadLogs();
+        }
+
+        function connect() {
+            var socket = new SockJS(api + "log");
+            stompClient = Stomp.over(socket);
+            stompClient.connect({}, function (frame) {
+                connected = true;
+                console.log('Connected: ' + frame);
+                canAdd = false;
+                canAddWait = false;
+                checkForDupli = limit;
+                obj = stompClient.subscribe('/logs/get', async function (messageOutput) {
+                    console.log("new message");
+                    if (live) {
+                        data = JSON.parse(messageOutput.body);
+                        if (filter != null && data['name'] != filter) {
+                            return;
+                        }
+                        if (canAdd) {
+                            while (canAddWait) {
+                                await sleep(100);
+                            }
+                            if (checkForDupli > 0) {
+                                checkForDupli--;
+                                if (hasDuplicate(data, logs)) {
+                                    return;
+                                }
+                            }
+                            showMessageOutputDESC(convertTextToWeb(convertLogToText(data)));
+                            logs.unshift(data);
+                            while (logs.length > limit) {
+                                logs.pop();
+                                $('#realLogs tr:last').remove();
+                            }
+
+                        }
+                        else {
+                            newData.append(data);
+                        }
+                    }
+                });
+                //#TODO first create a variable that is false which doesn't let subscribe delete any
+                //old data until the table is full, then it can change to false and delete everything
+                //when going to previous page just do a simple next 10 even if you might receive new data
+                //meanwhile, it will prove more easy
+                getLogsWithLimit(limit, 0, filter);
+            });
+        }
+
+        async function showInitalMessages(messages) {
+            $('#logLoading').empty();
+            $("#realLogs").empty();
+            logs = messages;
+            for (i = 0; i < messages.length; i++) {
+                showMessageOutputASC(convertTextToWeb(convertLogToText(messages[i])));
+            }
+            canAddWait = true;
+            canAdd = true;
+            await sleep(500);
+            for (i = 0; i < newData.length; i++) {
+                if (!hasDuplicate(newData[i], messages)) {
+                    showMessageOutputDESC(convertTextToWeb(convertLogToText(newData[i])));
+                    logs.unshift(newData[i]);
+                }
+            }
+            while (logs.length > limit) {
+                logs.pop();
+                $('#realLogs tr:last').remove();
+            }
+
+            canAddWait = false;
+        }
+
+        function disconnect() {
+            if (stompClient != null) {
+                stompClient.disconnect();
+            }
+            setConnected(false);
+            console.log("Disconnected");
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function convertLogToText(log) {
+            return '[' + log['id'] + '] [' + log['time'] + '] [' + log['name'] + '] [' + log['type'] + '] ' + log['log'];
+        }
+
+        function convertTextToWeb(text) {
+            return text + "<br />";
+        }
+
+        function hasDuplicate(data, datas) {
+            for (i = 0; i < datas.length; i++) {
+                if (data['id'] == datas[i]['id']) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function showMessageOutputASC(messageOutput) {
+            $("#realLogs").append('<tr><td>' + messageOutput + '</td></tr>');
+        }
+
+        function showMessageOutputDESC(messageOutput) {
+            $("#realLogs").prepend('<tr><td>' + messageOutput + '</td></tr>');
+        }
+
+        function sendMessage() {
+            var from = document.getElementById('from').value;
+            var text = document.getElementById('text').value;
+            stompClient.send("/app/log", {},
+                JSON.stringify({ 'name': from, 'log': text }));
+        }
+
+        function getLogsWithLimit(limit, from, filter) {
+            var url = null;
+            if (filter == null) {
+                url = api + 'getLogs?limit=' + limit + "&from=" + from;
+            }
+            else {
+                url = api + 'filterLogs?limit=' + limit + "&from=" + from + "&filter=" + filter;
+            }
+            $.ajax({
+                dataType: "json",
+                url: url,
+                headers: {
+                    'Access-Control-Allow-Origin': '*'
+                },
+                success: function (data) {
+                    console.log(data);
+                    showInitalMessages(data);
+                },
+                error: function (a, b, c) {
+                    alert("Could not connect to server !");
+                    $('#execProjectSelect').empty().append('<option value="" disabled selected>Connection failed !</option>');
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                }
+            });
+        }
+
+        function getMicroservicies() {
+            $('#logProjectSelect').append('<option value="" disabled selected>Connecting to server !</option>');
+            const url = api + 'microServices';
+            $.ajax({
+                dataType: "json",
+                url: url,
+                headers: {
+                    'Access-Control-Allow-Origin': '*'
+                },
+                success: function (data) {
+                    simpleProjects = data;
+                    $('#logProjectSelect').empty().append('<option value="All">All</option>');
+                    populateLogSelection(data);
+                    getWebMicroservicies();
+                },
+                error: function (a, b, c) {
+                    alert("Could not connect to server !");
+                    $('#execProjectSelect').empty().append('<option value="" disabled selected>Connection failed !</option>');
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                }
+            });
+        }
+
+        function getWebMicroservicies() {
+            const url = api + 'webMicroServices';
+            $.ajax({
+                dataType: "json",
+                url: url,
+                headers: {
+                    'Access-Control-Allow-Origin': '*'
+                },
+                success: function (data) {
+                    simpleProjects = data;
+                    populateLogSelection(data);
+                },
+                error: function (a, b, c) {
+                    alert("Could not connect to server !");
+                    $('#execProjectSelect').empty().append('<option value="" disabled selected>Connection failed !</option>');
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                }
+            });
+        }
+
 
         function getSimpleProject() {
             $('#execProjectSelect').append('<option value="" disabled selected>Connecting to server !</option>');
@@ -75,7 +324,7 @@
                 gitUrl: gitUrl,
                 branch: $('#addProjectBranch').val(),
                 main: $('#addProjectMain').val(),
-                lang : "python3",
+                lang: "python3",
                 parameters: parseInt($('#addProjectParameters').val(), 10)
             };
             $("#addProjectBigButton").attr("disabled", true);
@@ -90,6 +339,124 @@
                 error: function (a, b, c) {
                     alert("Error ! Please check console for details !");
                     console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                    $("#addProjectBigButton").attr("disabled", false);
+                }
+            });
+        }
+
+        function addMicroservice() {
+            const url = api + 'microService';
+            var gitUrl;
+            switch ($('#addProjectSelectGit').find(":selected").text()) {
+                case "GitHub":
+                    gitUrl = 'https://github.com/';
+                    break;
+                case 'GitLab':
+                    gitUrl = 'https://gitlab.com/';
+                    break;
+            }
+            gitUrl += $('#addProjectUser').val() + '/';
+            gitUrl += $('#addProjectRepo').val();
+
+            var data;
+            if (showCustomConfiguration) {
+                cpu = $("#addConfigurationSelectCpu option:selected").val();
+                memory = $("#addConfigurationMemory").val() + "M";
+                data = {
+                    name: $('#addProjectName').val(),
+                    gitUrl: gitUrl,
+                    branch: $('#addProjectBranch').val(),
+                    main: $('#addProjectMain').val(),
+                    lang: "python3",
+                    configuration: {
+                        cpus: cpu,
+                        memory: memory
+                    }
+                };
+            }
+            else {
+                data = {
+                    name: $('#addProjectName').val(),
+                    gitUrl: gitUrl,
+                    branch: $('#addProjectBranch').val(),
+                    main: $('#addProjectMain').val(),
+                    lang: "python3",
+                };
+            }
+            $("#addMicroBigButton").attr("disabled", true);
+            console.log(data);
+            $.post({
+                url: url,
+                data: JSON.stringify(data),
+                contentType: "application/json; charset=utf-8",
+                success: function (data) {
+                    handleUserData(data);
+                    $("#addMicroBigButton").attr("disabled", false);
+                },
+                error: function (a, b, c) {
+                    alert("Error ! Please check console for details !");
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                    $("#addMicroBigButton").attr("disabled", false);
+                }
+            });
+        }
+
+        function addWebMicroservice() {
+            const url = api + 'webMicroService';
+            var gitUrl;
+            switch ($('#addProjectSelectGit').find(":selected").text()) {
+                case "GitHub":
+                    gitUrl = 'https://github.com/';
+                    break;
+                case 'GitLab':
+                    gitUrl = 'https://gitlab.com/';
+                    break;
+            }
+            gitUrl += $('#addProjectUser').val() + '/';
+            gitUrl += $('#addProjectRepo').val();
+
+            var data;
+            if (showCustomConfiguration) {
+                data = {
+                    name: $('#addProjectName').val(),
+                    gitUrl: gitUrl,
+                    branch: $('#addProjectBranch').val(),
+                    main: $('#addProjectMain').val(),
+                    lang: "python3",
+                    configuration: {
+                        cpus: $("#addConfigurationSelectCpu option:selected").val(),
+                        memory: $("#addConfigurationMemory").val() + "M"
+                    },
+                    portIn: $('#addWebPortIn').val(),
+                    portOut: $('#addWebPortOut').val(),
+                    replicas: $('#addWebReplicas').val()
+                };
+            }
+            else {
+                data = {
+                    name: $('#addProjectName').val(),
+                    gitUrl: gitUrl,
+                    branch: $('#addProjectBranch').val(),
+                    main: $('#addProjectMain').val(),
+                    lang: "python3",
+                    portIn: $('#addWebPortIn').val(),
+                    portOut: $('#addWebPortOut').val(),
+                    replicas: $('#addWebReplicas').val()
+                };
+            }
+            $("#addWebBigButton").attr("disabled", true);
+            $.post({
+                url: url,
+                data: JSON.stringify(data),
+                contentType: "application/json; charset=utf-8",
+                success: function (data) {
+                    handleUserData(data);
+                    $("#addWebBigButton").attr("disabled", false);
+                },
+                error: function (a, b, c) {
+                    alert("Error ! Please check console for details !");
+                    console.log("ERROR A=" + a + " B=" + b + "C=" + c);
+                    $("#addWebBigButton").attr("disabled", false);
                 }
             });
         }
@@ -114,6 +481,16 @@
             });
         }
 
+        function populateLogSelection(data) {
+            $.each(data, function () {
+                //console.log(this);
+                var sel = document.getElementById('logProjectSelect');
+                var opt = document.createElement('option');
+                opt.appendChild(document.createTextNode(this['name']));
+                sel.appendChild(opt);
+            });
+        }
+
         function myFunction() {
             var x = document.getElementById("myTopnav");
             if (x.className === "topnav") {
@@ -131,16 +508,29 @@
         }
 
         function hideAll() {
+            showCustomConfiguration = false;
+
             $('#home').hide();
             $('#execProject').hide();
             $("#execProjectBigButton").hide();
 
             $('#addProject').hide();
+            $("#universalProjectInfo").hide();
+            $("#universalConfigurationInfo").hide();
+
+            $("#addMicro").hide();
+            $("#addWeb").hide();
+            $("#customConfiguration").hide();
+            $('#customConfigurationButton').prop('checked', false);
+
+            $('#showLogs').hide();
 
             $('#homeButton').removeClass("active");
             $('#execProjectButton').removeClass("active");
+            $('#showLogsButton').removeClass("active");
             $('#addProjectButton').removeClass("active");
             $('#addMicroButton').removeClass("active");
+            $("#addWebButton").removeClass("active");
 
             $("#execProjectParameters").empty();
             $("#result").empty();
@@ -160,10 +550,43 @@
             getSimpleProject();
         }
 
+        function showLogs() {
+            hideAll();
+            $('#showLogs').show();
+            $('#showLogsButton').addClass("active");
+            getMicroservicies();
+        }
+
         function showAddProject() {
             hideAll();
             $('#addProject').show();
+            $("#universalProjectInfo").show();
             $("#addProjectButton").addClass("active");
+        }
+
+        function showAddMicro() {
+            hideAll();
+            $('#addMicro').show();
+            $("#universalProjectInfo").show();
+            $("#customConfiguration").show();
+            $("#addMicroButton").addClass("active");
+        }
+
+        function showAddWeb() {
+            hideAll();
+            $('#addWeb').show();
+            $("#universalProjectInfo").show();
+            $("#customConfiguration").show();
+            $("#addWebButton").addClass("active");
+        }
+
+        function showHideCustomConfiguration(show) {
+            showCustomConfiguration = show;
+            if (show == true) {
+                $("#universalConfigurationInfo").show();
+            } else {
+                $("#universalConfigurationInfo").hide();
+            }
         }
 
         function addParameters(projectName) {
@@ -178,9 +601,7 @@
             selectedProject = project;
             $("#execProjectBigButton").show();
         }
-
-
-
+        connect();
     </script>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -190,8 +611,10 @@
     <div class="topnav" id="myTopnav">
         <a id="homeButton" onclick="showHome()">Home</a>
         <a id="execProjectButton" onclick="showExecProject()">Execute Simple Project</a>
+        <a id="showLogsButton" onclick="showLogs()">Show Logs</a>
         <a id="addProjectButton" onclick="showAddProject()">Add Simple Project</a>
-        <a id="addMicroButton">Add Microservice</a>
+        <a id="addMicroButton" onclick="showAddMicro()">Add Microservice</a>
+        <a id="addWebButton" onclick="showAddWeb()">Add Webmicroservice</a>
         <a href="javascript:void(0);" class="icon" onclick="myFunction()">
             <i class="fa fa-bars"></i>
         </a>
@@ -211,10 +634,9 @@
             </div>
             <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary"
                 id='execProjectBigButton'>Execute</button>
-
         </div>
 
-        <div id="addProject">
+        <div id="universalProjectInfo">
             <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectName" placeholder="Name">
             <select style="margin-top: 16px;" id="addProjectSelectGit" class="browser-default custom-select">
                 <option value="">GitHub</option>
@@ -228,10 +650,81 @@
                 placeholder="Branch">
             <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectMain"
                 placeholder="Main file">
+        </div>
+
+        <div style="margin-top: 16px;margin-left: 24px;" id="customConfiguration">
+            <input type="checkbox" class="custom-control-input" id="customConfigurationButton">
+            <label class="custom-control-label" for="customConfigurationButton">Custom configuration</label>
+        </div>
+
+        <div id="universalConfigurationInfo">
+            <select style="margin-top: 16px;" id="addConfigurationSelectCpu" class="browser-default custom-select">
+                <option value="0" disabled selected>Select max CPU usage</option>
+                <option value="0.1">10%</option>
+                <option value="0.2">20%</option>
+                <option value="0.3">30%</option>
+                <option value="0.4">40%</option>
+                <option value="0.5">50%</option>
+            </select>
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addConfigurationMemory"
+                placeholder="Max memory usage (in MB)">
+        </div>
+
+        <div id="addProject">
             <input style="margin-top: 16px;" type="text" class="form-control" id="addProjectParameters"
                 placeholder="No. of parameters">
             <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary"
                 id='addProjectBigButton'>Add project</button>
+        </div>
+
+        <div id="addMicro">
+            <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary" id='addMicroBigButton'>Add
+                Microservice</button>
+        </div>
+
+        <div id="addWeb">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addWebPortIn"
+                placeholder="Port In (The one the app exposes)">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addWebPortOut"
+                placeholder="Port Out (Can be anything)">
+            <input style="margin-top: 16px;" type="text" class="form-control" id="addWebReplicas"
+                placeholder="Replicas">
+            <button style="margin-top:16px;width: 100%" type="button" class="btn btn-primary" id='addWebBigButton'>Add
+                Webmicroservice</button>
+        </div>
+
+        <div id="showLogs">
+            <!-- <div id="conversationDiv">
+                <div>
+                    <input type="text" id="from" placeholder="Choose a nickname" />
+                </div>
+                <input type="text" id="text" placeholder="Write a message..." />
+                <button id="sendMessage" onclick="sendMessage();">Send</button>
+                <p id="response"></p>
+            </div> -->
+            <select id="logProjectSelect" class="browser-default custom-select">
+            </select>
+            <select id="logProjectLimitSelect" style="margin-top: 16px;" class="browser-default custom-select">
+                <option value="10">10</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+            </select>
+            <div style="align: center; margin-top:16px;">
+                <button id="buttonPrevLog" type="button" class="btn btn-primary hell" ng-click="Cancel()"
+                    aria-haspopup="true" aria-expanded="false" style="width:49%">
+                    <font size="4">Prev</font>
+                </button>
+                <button id="buttonNextLog" type="button" class="btn btn-primary" ng-click="Proceed()"
+                    aria-haspopup="true" aria-expanded="false" style="width:49%">
+                    <font size="4">Next</font>
+                </button>
+            </div>
+            <div id="logLoading">
+                <br />Loading...
+            </div>
+            <table style="margin-top: 16px;" id="realLogs">
+            </table>
         </div>
 
         <div id="result" style="margin-top:50px">
@@ -243,6 +736,14 @@
             addParameters($(this).val());
         });
 
+        $('#logProjectSelect').change(function () {
+            filterLogs($(this).val());
+        });
+
+        $('#logProjectLimitSelect').change(function () {
+            changeLimit($(this).val());
+        });
+
         $("#execProjectBigButton").click(function () {
             executeProject(selectedProject);
         });
@@ -250,6 +751,28 @@
         $("#addProjectBigButton").click(function () {
             addSimpleProject();
         });
+
+        $('#addMicroBigButton').click(function() {
+            addMicroservice();
+        });
+
+        $('#addWebBigButton').click(function(){
+            addWebMicroservice();
+        });
+
+        $("#buttonPrevLog").click(function () {
+            showPrevLogs();
+        });
+
+        $("#buttonNextLog").click(function () {
+            showNextLogs();
+        });
+
+        $('#customConfigurationButton').click(function () {
+            showHideCustomConfiguration($(this).is(':checked'));
+        });
+
+        
 
         showHome();
 
